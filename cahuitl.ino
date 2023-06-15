@@ -1,10 +1,7 @@
-#include "DHT_Async.h"
+#include <DHT_Async.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-
-
-
 
 /* Uncomment according to your sensortype. */
 #define DHT_SENSOR_TYPE DHT_TYPE_11
@@ -27,7 +24,7 @@ void setup() {
   
   Serial.begin(115200);
 
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) { // Address 0x3D for 128x64
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
     Serial.println(F("SSD1306 allocation failed"));
     for(;;);
   }
@@ -37,6 +34,11 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
 
+  display.setCursor(40, 30); // Posición del texto en la pantalla (0, 0)
+  display.print("ARMSYS.TECH");
+   display.display(); 
+    delay(2000);  // Espera 2 segundos entre lecturas
+  display.clearDisplay();
   // Display static text
 }
 /*
@@ -57,30 +59,28 @@ static bool measure_environment(float *temperature, float *humidity) {
 void loop() {
   delay(2000);  // Espera 2 segundos entre lecturas
   display.clearDisplay();
- 
 
   display.setCursor(0, 0); // Posición del texto en la pantalla (0, 0)
   display.print("Humedad: ");
    display.setCursor(0, 20); // Posición del texto en la pantalla (0, 0)
   display.print("Temperatura: ");
   
-    /* Measure temperature and humidity.  If the functions returns
-       true, then a measurement is available. */
     if (measure_environment(&temperature, &humidity)) {
-        display.setCursor(0, 0); // Posición del texto en la pantalla (0, 0)
+        display.setCursor(90,0); // Posición del texto en la pantalla (0, 0)
         display.print(humidity);
         display.print(" %");  
-        display.setCursor(0, 25); // Posición del texto en la pantalla (0, 0)
+        display.setCursor(90, 20); // Posición del texto en la pantalla (0, 0)
         display.print(temperature);
-        display.print(" °C");  
+        display.print(" C");
     }
     else{
-       display.setCursor(30,0); // Posición del texto en la pantalla (0, 0)
+       display.setCursor(90,0); // Posición del texto en la pantalla (0, 0)
         display.print("NaN");
         display.print(" %");  
-        display.setCursor(30, 25); // Posición del texto en la pantalla (0, 0)
+        display.setCursor(90, 20); // Posición del texto en la pantalla (0, 0)
         display.print("NaN");
-        display.print(" °C");
+        display.print(" C");
     }
+    
     display.display(); 
 }
