@@ -42,7 +42,7 @@ void setup() {
   display.setTextColor(WHITE);
   display.setTextSize(1);
   display.setCursor(40, 30); // Posición del texto en la pantalla (0, 0)
-  display.print("ARMSYS.TECH");
+  display.print("Erick Vega");
    display.display(); 
     delay(2000);  // Espera 2 segundos entre lecturas
   display.clearDisplay();
