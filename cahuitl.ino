@@ -47,9 +47,9 @@ const char* password = "sjmahpe122512";
 //Broker Público
 const char* mqtt_servidor_publico = "mqtt-dashboard.com";
 //Broker Local
-const char* mqtt_servidor_local = "127.0.0.1";
+const char* mqtt_servidor_local = "192.168.1.70";
 
-const char* topic_Sensores = "iot/UAEH/ErickVega/Estudio/Sensores";
+const char* topic_Sensores = "iot/UAEH/ErickVega/Estudio/Sensores/";
 const char* topic_Actuadores = "iot/UAEH/ErickVega/Estudio/Actuadores";
 const String nombreClienteMQTT = "eirikr";
 
@@ -62,6 +62,7 @@ long ultimoMensajeEnviado = 0;
 char mensaje[50];
 int value = 0;
 bool presenciaHumanaCercana = false;
+bool sensorDesconectado = false;
 float temperaturaActual = 0;
 float temperaturaAnterior = 0;
 float humedadActual = 0;
@@ -83,12 +84,12 @@ unsigned long tiempoPrevio_LED_Actuadores = 0;  //almacena la última vez que se
 unsigned long tiempoPrevio_Reconexion = 0;
 unsigned long tiempoPrevio_Sensado_Presencia = 0;
 unsigned long tiempoPrevio_Pantalla_Descando = 0;
-const byte temperatura_activacion_automatica = 21;
+const float temperatura_activacion_automatica = 21.5;
 /////////////////////////////////Intervalos de acciones periódicas////////////////////////////////////////////////////////////////////////
 const int intervalo_lectura_sensores = 5000;       //Intervalo entre lecturas de sensores
 const int intervalo_sensado_presencia = 5000;      //Tiempo entre sensado de presencia
-const int intervalo_descanso_pantalla = 15000;     //Tiempo transcurrido entre cada descanso de la pantalla OLED
-const int duracion_descanso_pantalla = 1000;       //Tiempo que la pantalla descansará antes de encender de nuevo
+const int intervalo_descanso_pantalla = 20000;     //Tiempo transcurrido entre cada descanso de la pantalla OLED
+const int duracion_descanso_pantalla = 2000;       //Tiempo que la pantalla descansará antes de encender de nuevo
 const int intervalo_reconexion = 3000;             //Tiempo entre intentos de conexión
 const int intervalo_verificacion_conexion = 5000;  //Tiempo entre verificaciones de conexión periódicas
 const int intervalo_mensajes = 5000;               //Tiempo entre mensajes de MQTT
@@ -323,16 +324,18 @@ void actualizarDatosAmbientales() {
     // Mostrar humedad en la pantalla OLED
     colocarTextoEnPantalla(2, 30, ">Humedad: " + String(humedadActual) + " %");  //Mostrar la temperatura a pantalla
     // Generar el mensaje de confort y mostrarlo en la pantalla
-    if (!isnan(humedadActual) && !isnan(temperaturaActual)) {
+    if (!isnan(humedadActual) || !isnan(temperaturaActual)) {
       mostrarSensacionRelativa(round(temperaturaActual), round(humedadActual));
+      sensorDesconectado=false;
     } else {  //Si no se detecta el sensor, avisarlo en pantalla
       colocarTextoEnPantalla(0, 50, "x Sensor Desconectado");
+      sensorDesconectado=true;
     }
   }
 }
 ///Preparar y publicar datos de sensores utilizando el protocolo MQTT en el servidor remoto en la nube
-void publicar_datos_MQTT_remoto() {
-  if (tiempoActual - ultimoMensajeEnviado > intervalo_mensajes) {  //si el último mensaje se envió hace más de 5 segundos
+void publicar_datos_MQTT() {
+  if (tiempoActual - ultimoMensajeEnviado > intervalo_mensajes && !sensorDesconectado) {  //si el último mensaje se envió hace más de 5 segundos
     char payload[128];                                             //Tamaño de carga útil
     ///Carga de datos de sensores y estado del ventilador
     datosSensores["temperatura"] = temperaturaActual;
@@ -341,10 +344,10 @@ void publicar_datos_MQTT_remoto() {
     datosSensores["ventilador"] = ventilador;
     //Serializado de datos de carga útil
     serializeJson(datosSensores, payload);
-    //Publicación en cliente remoto
+         //Publicación en cliente local
     client.publish(topic_Sensores, payload);
-    //Impresión serial de la carga útil
     Serial.println(payload);
+
     //Se registra el momento en el que se envía el mensaje como el último mensaje enviado
     ultimoMensajeEnviado = millis();
   }
@@ -401,6 +404,7 @@ void callback(char* topic1, byte* payload, unsigned int length) {
   }
 }
 void monitorearModoAutomatico() {
+
   if (modoAutomatico) {
     if (temperaturaActual > temperatura_activacion_automatica) {  //Si está activado el modo automático, revisar criterio de revisión
       ventilarArea(true);
@@ -440,8 +444,8 @@ void mantenerConexionMQTT() {
         case false:                                                                                   //En caso contrario
           Serial.println("X Fallo en comunicacion con Broker, error rc= " + String(client.state()));  //Avisar de intento de conexión a Broker
           Serial.println("Reintentando en " + String(intervalo_reconexion) + " segundos");
-          colocarTextoEnPantalla(0, 50, "X Fallo en comunicacion con Broker, error rc= " + String(client.state()));
-          colocarTextoEnPantalla(0, 70, "Reintentando en " + String(intervalo_reconexion) + " segundos ");
+          colocarTextoEnPantalla(0, 30, "X Fallo en comunicacion con Broker, error rc= " + String(client.state()));
+          colocarTextoEnPantalla(0, 40, "Reintentando en " + String(intervalo_reconexion) + " segundos ");
           display.display();
           break;
       }
@@ -502,17 +506,17 @@ void setup() {
   display.clearDisplay();
   ///////////////////Intro
   // Dibuja logo de ArmsysTech/
-  display.drawBitmap(0, 21, icono_armsys, 50, 50, WHITE);
-  colocarTextoEnPantalla(30, 0, "Erick Renato");
-  colocarTextoEnPantalla(30, 15, "Vega Ceron");
-  colocarTextoEnPantalla(75, 30, "IoT");
+  display.drawBitmap(0, 10, icono_armsys, 50, 50, WHITE);
+  colocarTextoEnPantalla(55, 10, "Erick Renato");
+  colocarTextoEnPantalla(55, 25, "Vega Ceron");
+  colocarTextoEnPantalla(90, 35, "IoT");
   display.display();
   delay(5000);  // Espera 5 segundos
   display.clearDisplay();
   display.display();
   // Conexion al broker MQTT
-  client.setServer(mqtt_servidor_publico, 1883);  // Se hace la conexión al servidor MQTT Público
-  //client.setServer(mqtt_servidor_local, 1883);    // Se hace la conexión al servidor MQTT Local
+  //client.setServer(mqtt_servidor_publico, 1883);  // Se hace la conexión al servidor MQTT Público
+  client.setServer(mqtt_servidor_local, 1883);    // Se hace la conexión al servidor MQTT Local
   client.setCallback(callback);  //Se activa la función que permite recibir mensajes de respuesta
 }  // Fin del void setup()
 ////////////////////////////////////////////////////////////
@@ -537,10 +541,10 @@ void switchPantalla() {
 /////Se actualiza el estado de la pantalla si ha cumplido su periodo máximo encendida y debe cumplir el intervalo de descanso
 void actualizarEstado_Pantalla() {
   if (!estadoPantalla) {                                                             //Si está apagado
-    if (millis() - tiempoPrevio_Pantalla_Descando >= intervalo_descanso_pantalla) {  //Y ya ha pasado el intervalo entre parpadeos
+    if (millis() - tiempoPrevio_Pantalla_Descando >= duracion_descanso_pantalla) {  //Y ya ha pasado el intervalo entre parpadeos
       estadoPantalla = true;                                                         //Se enciende
       cambioEstadoPantalla = true;                                                   //Se cambia el estado
-      tiempoPrevio_Pantalla_Descando += intervalo_descanso_pantalla;                 //Y se registra cuándo sucedió el último cambio
+      tiempoPrevio_Pantalla_Descando += duracion_descanso_pantalla;                 //Y se registra cuándo sucedió el último cambio
     }
   } else {                                                                           //Si está encendido
     if (millis() - tiempoPrevio_Pantalla_Descando >= duracion_pantalla_encendida) {  //Y ya ha cumplido la duración de encendido determinada
@@ -565,7 +569,7 @@ void loop() {
   switchLEDS();
   switchPantalla();
   actualizarDatosAmbientales();  //refresca los datos del sensor DHT
-  publicar_datos_MQTT_remoto();
+  publicar_datos_MQTT();
   refrescarBarraEstado();  //Actualizar iconos de barra de estado
   client.loop();           // Loop de cliente MQTT
 
