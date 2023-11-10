@@ -21,12 +21,15 @@
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
+#include <TinyGPSPlus.h>
+
 
 #define BUILTIN_LED 13
 #define LED_CONEXIONES 15
 #define LED_ACTUADORES 12
 #define RELE 33
 #define PIR 14
+#define GPS_SERIAL Serial2
 
 #define SCREEN_WIDTH 128  // Ancho de la pantalla OLED, en píxeles
 #define SCREEN_HEIGHT 64  // Alto de la pantalla OLED, en píxeles
@@ -49,10 +52,15 @@ const char* mqtt_servidor_publico = "mqtt-dashboard.com";
 //Broker Local
 const char* mqtt_servidor_local = "192.168.1.70";
 
-const char* topic_Sensores = "iot/UAEH/ErickVega/Estudio/Sensores/";
+const char* topic_Sensores = "iot/UAEH/ErickVega/Estudio/Sensores";
 const char* topic_Actuadores = "iot/UAEH/ErickVega/Estudio/Actuadores";
 const String nombreClienteMQTT = "eirikr";
 
+static const int GPS_RXPin = 15, GPS_TXPin = 16;
+static const uint32_t GPSBaud = 9600;
+
+
+TinyGPSPlus gps;                 // Crea una instancia de TinyGPSPlus
 WiFiClient espClient;            //Definición de cliente WiFi
 PubSubClient client(espClient);  //Cliente MQTT
 DHT dht(DHTPIN, DHTTYPE);
@@ -60,8 +68,9 @@ DHT dht(DHTPIN, DHTTYPE);
 ////////////////////////////////////Variables/////////////////////////////////////////////////////////////////////
 long ultimoMensajeEnviado = 0;
 char mensaje[50];
+IPAddress ip_dispositivo;
 int value = 0;
-bool presenciaHumanaCercana = false;
+bool presenciaHumanaCercana = true;
 bool sensorDesconectado = false;
 float temperaturaActual = 0;
 float temperaturaAnterior = 0;
@@ -74,6 +83,7 @@ bool cambioEstadoPantalla = false;
 bool estadoConexion_MQTT = false;
 bool estadoConexion_WIFI = false;
 bool estadoPantalla = false;
+bool GPS_habilitado = false;
 byte estado_LED_Conexion = LOW;
 byte estado_LED_Actuadores = LOW;
 byte estadoPrevioLEDS = LOW;
@@ -84,6 +94,10 @@ unsigned long tiempoPrevio_LED_Actuadores = 0;  //almacena la última vez que se
 unsigned long tiempoPrevio_Reconexion = 0;
 unsigned long tiempoPrevio_Sensado_Presencia = 0;
 unsigned long tiempoPrevio_Pantalla_Descando = 0;
+unsigned long tiempoPrevio_Sensado_GPS = 0;
+double latitud = 0.0;
+double longitud = 0.0;
+
 const float temperatura_activacion_automatica = 21.5;
 /////////////////////////////////Intervalos de acciones periódicas////////////////////////////////////////////////////////////////////////
 const int intervalo_lectura_sensores = 5000;       //Intervalo entre lecturas de sensores
@@ -97,8 +111,8 @@ const int intervalo_parpadeo_LED = 500;            //Tiempo entre parpadeos de l
 const int duracionEncendido_LED_Conexion = 500;    //Duración de LED encendido
 const int diracionEncendido_LED_Actuadores = 500;  //Duración de LED encendido
 const int duracion_pantalla_encendida = 15000;     //Duración máxima de la pantalla encendida
+const int intervalo_actualizacion_GPS = 5000;
 /////////////////////JSON///////////////////////////////////////////////////////////////////////////////////////////////////////////////
-StaticJsonDocument<48> datosSensores;
 StaticJsonDocument<16> datosActuadores;
 //////////////////////////////////////////////Iconos de GUI////////////////////////////////////////////////////////////////
 // 'icono_armsys', 50x50px
@@ -132,39 +146,10 @@ const unsigned char icono_iot[45] PROGMEM = {
   0x7b, 0x40, 0x02, 0x8a, 0x00, 0x0a, 0xaa, 0x80, 0x02, 0x8a, 0x00, 0x16, 0xfb, 0x40, 0x1f, 0x07,
   0xc0, 0x1f, 0xff, 0xc0, 0x1f, 0x8f, 0xc0, 0x1f, 0x57, 0xc0, 0x1f, 0x8f, 0xc0
 };
-// 'icono_uaeh', 50x50px
-const unsigned char icono_uaeh[350] PROGMEM = {
-  0x07, 0xff, 0xff, 0xff, 0xff, 0xf8, 0x00, 0x07, 0xff, 0xff, 0xfb, 0xff, 0xf8, 0x00, 0x07, 0xff,
-  0xff, 0xf3, 0xff, 0xf8, 0x00, 0x07, 0xff, 0xff, 0xe7, 0xff, 0xf8, 0x00, 0x07, 0xff, 0xff, 0xcb,
-  0xff, 0xf8, 0x00, 0x07, 0x81, 0x9f, 0x9d, 0xf2, 0xf8, 0x00, 0x06, 0x7f, 0x39, 0x3e, 0x1e, 0x78,
-  0x00, 0x07, 0x2c, 0x78, 0x7a, 0x0d, 0x38, 0x00, 0x07, 0x00, 0x78, 0xfa, 0x29, 0x18, 0x00, 0x06,
-  0x00, 0x37, 0xca, 0x5f, 0xf8, 0x00, 0x07, 0x20, 0x27, 0x48, 0x39, 0x18, 0x00, 0x04, 0xf0, 0x3c,
-  0x09, 0xef, 0x98, 0x00, 0x04, 0xf0, 0x2c, 0x03, 0xee, 0x98, 0x00, 0x04, 0xf1, 0x0c, 0x07, 0xfe,
-  0x98, 0x00, 0x07, 0xf1, 0x10, 0x60, 0x7f, 0x78, 0x00, 0x07, 0xb1, 0x30, 0x20, 0x7f, 0x78, 0x00,
-  0x07, 0xf0, 0x7f, 0xe0, 0x78, 0x78, 0x00, 0x07, 0xa0, 0xf0, 0x70, 0xfc, 0xf8, 0x00, 0x07, 0x81,
-  0xf0, 0x70, 0xfe, 0xf8, 0x00, 0x07, 0x92, 0x0f, 0x86, 0x3e, 0x98, 0x00, 0x07, 0xb2, 0x08, 0x86,
-  0x7e, 0x98, 0x00, 0x06, 0x60, 0x0c, 0x80, 0x7f, 0xf8, 0x00, 0x06, 0x40, 0x0c, 0x80, 0xff, 0xe8,
-  0x00, 0x06, 0x43, 0xfc, 0xe7, 0xff, 0xc8, 0x00, 0x06, 0x64, 0xfc, 0xff, 0xff, 0x88, 0x00, 0x07,
-  0xff, 0xfc, 0xe7, 0xff, 0x18, 0x00, 0x06, 0x5f, 0xfc, 0xe7, 0xe9, 0x98, 0x00, 0x07, 0x00, 0x64,
-  0xe7, 0xe1, 0xb8, 0x00, 0x07, 0xa0, 0x24, 0xe7, 0xe1, 0xf8, 0x00, 0x07, 0xa7, 0xec, 0xff, 0xff,
-  0xf8, 0x00, 0x07, 0x8f, 0xf4, 0xff, 0xff, 0x78, 0x00, 0x07, 0x87, 0x87, 0xff, 0xc1, 0x78, 0x00,
-  0x07, 0x87, 0x87, 0xfd, 0xc1, 0x78, 0x00, 0x07, 0x87, 0x9f, 0xfd, 0xff, 0x78, 0x00, 0x07, 0xe7,
-  0x88, 0xff, 0xff, 0x78, 0x00, 0x07, 0xbf, 0xc3, 0xff, 0xff, 0x78, 0x00, 0x07, 0x9f, 0xff, 0xff,
-  0xff, 0x98, 0x00, 0x07, 0xc3, 0xff, 0xff, 0xff, 0xb8, 0x00, 0x07, 0xc3, 0xff, 0xff, 0xff, 0xf8,
-  0x00, 0x07, 0xe3, 0xff, 0xcb, 0xf9, 0x98, 0x00, 0x07, 0xa3, 0xff, 0xfb, 0xff, 0x98, 0x00, 0x07,
-  0xe7, 0xff, 0xff, 0xf3, 0x98, 0x00, 0x07, 0xa3, 0xff, 0xff, 0xe7, 0x98, 0x00, 0x07, 0xb3, 0xff,
-  0xff, 0xef, 0x98, 0x00, 0x07, 0xbd, 0xff, 0xff, 0xdf, 0x18, 0x00, 0x07, 0x9e, 0x09, 0xe3, 0xc3,
-  0x38, 0x00, 0x07, 0x80, 0xff, 0x4f, 0xf1, 0xf8, 0x00, 0x07, 0xc1, 0xff, 0x1f, 0xf1, 0xf8, 0x00,
-  0x07, 0xff, 0xff, 0xbf, 0xff, 0xf8, 0x00, 0x07, 0xff, 0xff, 0xff, 0xff, 0xf8, 0x00
-};
-// 'icono_wifi', 43x15px
-const unsigned char icono_wifi[90] PROGMEM = {
-  0x07, 0x80, 0x00, 0x00, 0x78, 0x00, 0x06, 0x00, 0x00, 0x00, 0x08, 0x00, 0x04, 0x00, 0x01, 0xff,
-  0xc0, 0x00, 0x04, 0x00, 0x03, 0xff, 0xe0, 0x00, 0x00, 0x00, 0x03, 0x8d, 0xf0, 0x00, 0x00, 0x2d,
-  0x03, 0x8f, 0xf0, 0x00, 0x00, 0x2d, 0x43, 0xbd, 0xf0, 0x00, 0x00, 0x24, 0x43, 0x8d, 0xf0, 0x00,
-  0x00, 0x36, 0x43, 0xbd, 0xf0, 0x00, 0x00, 0x36, 0x43, 0xbd, 0xf0, 0x00, 0x00, 0x00, 0x07, 0xbd,
-  0xf0, 0x00, 0x04, 0x00, 0x0f, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x0f, 0xff, 0xc0, 0x00, 0x06, 0x00,
-  0x00, 0x00, 0x08, 0x00, 0x07, 0x80, 0x00, 0x00, 0x38, 0x00
+const unsigned char icono_GPS[30] PROGMEM = {
+  // 'gps, 15x15px
+  0x00, 0x00, 0x03, 0x80, 0x07, 0xc0, 0x0f, 0xe0, 0x0e, 0xe0, 0x0c, 0x60, 0x0e, 0xe0, 0x0f, 0xe0,
+  0x07, 0xc0, 0x03, 0x80, 0x0d, 0xe0, 0x1c, 0x30, 0x0f, 0xe0, 0x03, 0x80, 0x00, 0x00
 };
 // 'icono_ventilador', 40x40px
 const unsigned char icono_ventilador[30] PROGMEM = {
@@ -177,17 +162,96 @@ const unsigned char icono_automatico[30] PROGMEM = {
   0xf9, 0xfe, 0xf1, 0xfe, 0xf1, 0xfe, 0xe3, 0xfe, 0xc3, 0xfe, 0xc0, 0x3e, 0x80, 0x3e, 0x00, 0x3e,
   0x00, 0x66, 0x00, 0xe6, 0xf0, 0xc2, 0xe1, 0xda, 0xe3, 0xda, 0xe3, 0x80, 0xe7, 0xbc
 };
-const unsigned char icono_wifi_2[30] PROGMEM = {
+const unsigned char icono_wifi[30] PROGMEM = {
   // 'wifi, 16x15px
   0x00, 0x00, 0x00, 0x00, 0x07, 0xe0, 0x3f, 0xfc, 0x78, 0x1e, 0x60, 0x06, 0x01, 0x80, 0x0f, 0xf0,
   0x0c, 0x30, 0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00
 };
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////SETUP/////////////////////////////////////////////////////////////////////////////////////
+////////////Configuración del programa, esta parte se ejecuta sólo una vez al energizarse el sistema/////////////////////
+void setup() {
+  //// Inicialización del programa
+  // Inicia comunicación serial
+  Serial.begin(2000000);
+  dht.begin();  //Se inicializa el sensor DHT11
+  GPS_SERIAL.begin(GPSBaud);
+  /// Configuración de pines //
+  pinMode(BUILTIN_LED, OUTPUT);  // Se configuran los pines de los LEDs indicadores como salida
+  pinMode(LED_CONEXIONES, OUTPUT);
+  pinMode(LED_ACTUADORES, OUTPUT);
+  pinMode(RELE, OUTPUT);  // Inicializa el rele como output con resistencia Pull- Up interna
+  pinMode(PIR, INPUT);    // Inicializa el rele como input con resistencia Pull- Up interna
+  // Condiciones Iniciales //
+  digitalWrite(BUILTIN_LED, LOW);  // Se inicia con los LEDs indicadores apagados
+  digitalWrite(LED_CONEXIONES, LOW);
+  digitalWrite(LED_ACTUADORES, LOW);
+  digitalWrite(RELE, LOW);  // Se inicia con el relé apagado
+
+  // Inicializar la pantalla SSD1306
+  Serial.println("Inicializando pantalla ");
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("Fallo en la asignación de SSD1306"));
+    for (;;) {
+      // Se repite indefinidamente si falla la inicialización de la pantalla
+    }
+  }
+  delay(350);
+  display.cp437(true);
+  display.setTextColor(WHITE);
+  display.setTextSize(1);
+  display.clearDisplay();
+  ///////////////////Intro
+  // Dibuja logo de ArmsysTech/
+  display.drawBitmap(0, 10, icono_armsys, 50, 50, WHITE);
+  colocarTextoEnPantalla(55, 10, "Erick Renato");
+  colocarTextoEnPantalla(55, 25, "Vega Ceron");
+  colocarTextoEnPantalla(90, 35, "IoT");
+  display.display();
+  delay(5000);  // Espera 5 segundos
+  display.clearDisplay();
+  display.display();
+  // Conexion al broker MQTT
+  //client.setServer(mqtt_servidor_publico, 1883);  // Se hace la conexión al servidor MQTT Público
+  client.setServer(mqtt_servidor_local, 1883);  // Se hace la conexión al servidor MQTT Local
+  client.setCallback(callback);                 //Se activa la función que permite recibir mensajes de respuesta
+}  // Fin del void setup()
+////////////////////////////////////////////////////////////
 //////////////////////////Funciones///////////////////////////////////////////////////////////////////////////////////
 void colocarTextoEnPantalla(byte fila, byte columna, String mensaje) {
   //Se coloca el cursor en la fila y columna indicadas
-  display.setCursor(fila, columna);
-  display.print(mensaje);
+  if (presenciaHumanaCercana) {
+    display.setCursor(fila, columna);
+    display.print(mensaje);
+  }
+}
+void actualizarGPS() {
+  //Si está apagado
+  if (tiempoActual - tiempoPrevio_Sensado_GPS >= intervalo_actualizacion_GPS) {  //Y ya ha pasado el intervalo entre parpadeos
+    obtenerPosicionGPS(latitud, longitud);                                       //Se obtiene la posición GPS
+    tiempoPrevio_Sensado_GPS += intervalo_actualizacion_GPS;                     //Y se registra cuándo sucedió el último cambio
+  }
+}
+////////// Función para obtener la posición GPS
+void obtenerPosicionGPS(double& lat, double& lon) {
+  // Limpia las variables de posición
+  lat = 0.0;
+  lon = 0.0;
+  // Espera hasta que se obtenga una nueva posición válida
+  while (GPS_SERIAL.available() > 0) {
+    if (gps.encode(GPS_SERIAL.read())) {
+      if (gps.location.isUpdated()) {
+        // Actualiza las variables de posición
+        lat = gps.location.lat();
+        lon = gps.location.lng();
+      }
+    }
+  }
+  // Imprime información si hay una posición válida
+  if (lat != 0.0 && lon != 0.0) {
+    GPS_habilitado = true;
+  } else {
+    GPS_habilitado = false;
+  }
 }
 /////Conmutar la activación de los LED si hay algún cambio en el estado de alguno
 void switchLEDS() {
@@ -285,7 +349,7 @@ void mantenerConexionWIFI() {
   if (WiFi.status() != WL_CONNECTED) {
     display.clearDisplay();  //Se limpia la pantalla
     // Iniciar conexion WiFi
-    Serial.print(">Conectando a Red WIFI: ");                //Anunciar intento de conexión WIFI a Serial
+    Serial.println(">Conectando a Red WIFI: ");              //Anunciar intento de conexión WIFI a Serial
     Serial.print(ssid);                                      //Mostrar SSID a serial
     colocarTextoEnPantalla(0, 5, "Conectando a red WIFI:");  //Mostrar SSID en pantalla
     colocarTextoEnPantalla(0, 25, ssid);
@@ -298,9 +362,10 @@ void mantenerConexionWIFI() {
       switchLEDS();  //Activar o desactivar el led wifi conforme a su intervalo de parpadeo
     }
     if (WiFi.status() == WL_CONNECTED) {
+      ip_dispositivo = WiFi.localIP();
       Serial.println("WiFi conectado exitosamente");  // Una vez lograda la conexión, se reporta al puerto serial el éxito
       Serial.println("IP:");                          // Y se reporta la IP
-      Serial.println(WiFi.localIP());
+      Serial.println(ip_dispositivo);
       // Dibuja icono de wifi y muestra texto de confirmación a pantalla
       display.drawBitmap(20, 0, icono_wifi, 43, 15, WHITE);
       colocarTextoEnPantalla(10, 40, "|WiFi Conectado|");
@@ -318,33 +383,46 @@ void actualizarDatosAmbientales() {
   //Leer sensores
   temperaturaActual = dht.readTemperature();  //Leer y registrar temperatura
   humedadActual = dht.readHumidity();         //Leer y registrar humedad
-  //Solo se muestra la pantalla cuando hay presencia humana cercana
-  if (presenciaHumanaCercana) {
-    colocarTextoEnPantalla(2, 20, ">Temperatura: " + String(temperaturaActual));  //Mostrar la temperatura a pantalla
-    // Mostrar humedad en la pantalla OLED
-    colocarTextoEnPantalla(2, 30, ">Humedad: " + String(humedadActual) + " %");  //Mostrar la temperatura a pantalla
-    // Generar el mensaje de confort y mostrarlo en la pantalla
-    if (!isnan(humedadActual) || !isnan(temperaturaActual)) {
-      mostrarSensacionRelativa(round(temperaturaActual), round(humedadActual));
-      sensorDesconectado=false;
-    } else {  //Si no se detecta el sensor, avisarlo en pantalla
-      colocarTextoEnPantalla(0, 50, "x Sensor Desconectado");
-      sensorDesconectado=true;
-    }
+                                              //Solo se muestra la pantalla cuando hay presencia humana cercana
+
+  colocarTextoEnPantalla(2, 20, ">Temperatura: " + String(temperaturaActual));  //Mostrar la temperatura a pantalla
+  // Mostrar humedad en la pantalla OLED
+  colocarTextoEnPantalla(2, 30, ">Humedad: " + String(humedadActual) + " %");  //Mostrar la temperatura a pantalla
+  // Generar el mensaje de confort y mostrarlo en la pantalla
+  if (!isnan(humedadActual) || !isnan(temperaturaActual)) {
+    mostrarSensacionRelativa(round(temperaturaActual), round(humedadActual));
+    sensorDesconectado = false;
+  } else {  //Si no se detecta el sensor, avisarlo en pantalla
+    colocarTextoEnPantalla(0, 50, "x Sensor Desconectado");
+    sensorDesconectado = true;
   }
 }
 ///Preparar y publicar datos de sensores utilizando el protocolo MQTT en el servidor remoto en la nube
 void publicar_datos_MQTT() {
-  if (tiempoActual - ultimoMensajeEnviado > intervalo_mensajes && !sensorDesconectado) {  //si el último mensaje se envió hace más de 5 segundos
-    char payload[128];                                             //Tamaño de carga útil
-    ///Carga de datos de sensores y estado del ventilador
-    datosSensores["temperatura"] = temperaturaActual;
-    datosSensores["humedad"] = humedadActual;
-    datosSensores["presenciaHumana"] = presenciaHumanaCercana;
-    datosSensores["ventilador"] = ventilador;
+  if (tiempoActual - ultimoMensajeEnviado >= intervalo_mensajes && !sensorDesconectado && GPS_habilitado) {  //si el último mensaje se envió hace más de 5 segundos
+                                                                                                             ///Carga de datos de sensores y estado del ventilador
+    StaticJsonDocument<200> datosSensores;
+    // Agregar datos al objeto JSON
+    datosSensores["sensor"] = "ESP32_Cahuitl_1";
+
+    JsonObject datos = datosSensores.createNestedObject("datos");
+    datos["temperatura"] = temperaturaActual;
+    datos["humedad"] = humedadActual;
+    datos["ventilador"] = ventilador;
+
+    JsonObject ubicacion = datos.createNestedObject("ubicacion");
+    ubicacion["latitud"] = latitud;
+    ubicacion["longitud"] = longitud;
+
+    JsonObject metadatos = datos.createNestedObject("metadatos");
+    metadatos["ip"] = ip_dispositivo.toString();
+
+    size_t length = measureJson(datosSensores);
+    char payload[length + 1];  // +1 para el carácter nulo al final
+
     //Serializado de datos de carga útil
-    serializeJson(datosSensores, payload);
-         //Publicación en cliente local
+    serializeJson(datosSensores, payload, length + 1);
+    //Publicación en cliente local
     client.publish(topic_Sensores, payload);
     Serial.println(payload);
 
@@ -354,12 +432,12 @@ void publicar_datos_MQTT() {
 }
 //Función para activar el relé del ventilador
 void ventilarArea(bool ventilar) {
-  if (ventilar) {                              //Si el comando es para ventilar
-    digitalWrite(RELE, HIGH);                  //Enviar señal de activado al Relé
-    ventilador = true;                         //y cambiar estado a activado
-  } else {                                     //Si el comando es para detener ventilación
-    digitalWrite(RELE, LOW);                   //Se envía señal de apagado al Relé
-    ventilador = false;                        //Se cambia el estado a desactivado
+  if (ventilar) {              //Si el comando es para ventilar
+    digitalWrite(RELE, HIGH);  //Enviar señal de activado al Relé
+    ventilador = true;         //y cambiar estado a activado
+  } else {                     //Si el comando es para detener ventilación
+    digitalWrite(RELE, LOW);   //Se envía señal de apagado al Relé
+    ventilador = false;        //Se cambia el estado a desactivado
   }
 }
 // Funcion Callback, aqui se pueden poner acciones si se reciben mensajes MQTT
@@ -416,8 +494,8 @@ void monitorearModoAutomatico() {
 // Función para mantener conectado el cliente al Broker MQTT
 void mantenerConexionMQTT() {
   if (!client.connected()) {
-    display.clearDisplay();                             //Limpiar Pantalla
-    Serial.print("Intentando conexion a Broker MQTT");  //Avisar de intento de conexión a Broker
+    display.clearDisplay();                               //Limpiar Pantalla
+    Serial.println("Intentando conexion a Broker MQTT");  //Avisar de intento de conexión a Broker
     colocarTextoEnPantalla(0, 0, ">Conectando a Broker MQTT");
     display.display();
   }
@@ -429,23 +507,24 @@ void mantenerConexionMQTT() {
       if (millis() - tiempoPrevio_Reconexion >= intervalo_reconexion) {
         client.connect("eirikr");
         tiempoPrevio_Reconexion += intervalo_reconexion;
-        display.clearDisplay();
       }
       switch (client.connected()) {
         case true:  //En caso de que la conexión haya sido exitosa
-          Serial.print("Conexion exitosa");
-          colocarTextoEnPantalla(5, 10, "Conexion con Broker MQTT Exitosa");
-          display.drawBitmap(0, 30, icono_iot, 43, 20, WHITE);
-          display.drawBitmap(0, 45, icono_iot, 20, 15, WHITE);
-          display.display();
+          Serial.println("Conexion exitosa");
+          if (presenciaHumanaCercana) {
+            colocarTextoEnPantalla(5, 10, "Conexion con Broker MQTT Exitosa");
+            display.drawBitmap(0, 30, icono_iot, 20, 15, WHITE);
+            display.display();
+          }
+
           // Suscribirse al tema de actuadores
           client.subscribe(topic_Actuadores);
           break;
         case false:                                                                                   //En caso contrario
           Serial.println("X Fallo en comunicacion con Broker, error rc= " + String(client.state()));  //Avisar de intento de conexión a Broker
           Serial.println("Reintentando en " + String(intervalo_reconexion) + " segundos");
-          colocarTextoEnPantalla(0, 30, "X Fallo en comunicacion con Broker, error rc= " + String(client.state()));
-          colocarTextoEnPantalla(0, 40, "Reintentando en " + String(intervalo_reconexion) + " segundos ");
+          colocarTextoEnPantalla(0, 19, "X Fallo en comunicacion con Broker, error= " + String(client.state()));
+          colocarTextoEnPantalla(0, 45, "Reintentando en " + String(intervalo_reconexion) + " segundos ");
           display.display();
           break;
       }
@@ -455,12 +534,12 @@ void mantenerConexionMQTT() {
 //////Función para mostrar y mantener íconos de conexión, el indicador de modo automático y actuadores en la barra de estado/////////////////
 void refrescarBarraEstado() {
   if (presenciaHumanaCercana) {
-    if (WiFi.status() == WL_CONNECTED) {                      //Si el WiFi está conectado
-      display.drawBitmap(0, 0, icono_wifi_2, 16, 15, WHITE);  //mostrar icono de WiFi en pantalla
+    if (WiFi.status() == WL_CONNECTED) {                    //Si el WiFi está conectado
+      display.drawBitmap(0, 0, icono_wifi, 16, 15, WHITE);  //mostrar icono de WiFi en pantalla
     }
     if (client.connected()) {  //Si el cliente está conectado al Broker MQTT
-      colocarTextoEnPantalla(27, 0, "MQTT");
-      display.setCursor(20, 0);  // Posición del texto en la pantalla (0, 0)
+      colocarTextoEnPantalla(46, 0, "MQTT");
+      display.setCursor(40, 0);  // Posición del texto en la pantalla (0, 0)
       display.write(4);          //Mostrar simbolo
     }
     if (ventilador) {                                              //Si el ventilador está activado
@@ -469,57 +548,13 @@ void refrescarBarraEstado() {
     if (modoAutomatico) {                                           //Si el modo automático está activado
       display.drawBitmap(106, 0, icono_automatico, 15, 15, WHITE);  //mostrar icono de ventilador en pantalla
     }
+    if (GPS_habilitado) {                                   //Si el modo automático está activado
+      display.drawBitmap(20, 0, icono_GPS, 15, 15, WHITE);  //mostrar icono de ventilador en pantalla
+    }
     display.display();
   }
 }
 
-////////////Configuración del programa, esta parte se ejecuta sólo una vez al energizarse el sistema/////////////////////
-void setup() {
-  //// Inicialización del programa
-  // Inicia comunicación serial
-  Serial.begin(2000000);
-  dht.begin();  //Se inicializa el sensor DHT11
-  /// Configuración de pines //
-  pinMode(BUILTIN_LED, OUTPUT);  // Se configuran los pines de los LEDs indicadores como salida
-  pinMode(LED_CONEXIONES, OUTPUT);
-  pinMode(LED_ACTUADORES, OUTPUT);
-  pinMode(RELE, OUTPUT);  // Inicializa el rele como output con resistencia Pull- Up interna
-  pinMode(PIR, INPUT);    // Inicializa el rele como input con resistencia Pull- Up interna
-  // Condiciones Iniciales //
-  digitalWrite(BUILTIN_LED, LOW);  // Se inicia con los LEDs indicadores apagados
-  digitalWrite(LED_CONEXIONES, LOW);
-  digitalWrite(LED_ACTUADORES, LOW);
-  digitalWrite(RELE, LOW);  // Se inicia con el relé apagado
-
-  // Inicializar la pantalla SSD1306
-  Serial.print("Inicializando pantalla ");
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("Fallo en la asignación de SSD1306"));
-    for (;;) {
-      // Se repite indefinidamente si falla la inicialización de la pantalla
-    }
-  }
-  delay(350);
-  display.cp437(true);
-  display.setTextColor(WHITE);
-  display.setTextSize(1);
-  display.clearDisplay();
-  ///////////////////Intro
-  // Dibuja logo de ArmsysTech/
-  display.drawBitmap(0, 10, icono_armsys, 50, 50, WHITE);
-  colocarTextoEnPantalla(55, 10, "Erick Renato");
-  colocarTextoEnPantalla(55, 25, "Vega Ceron");
-  colocarTextoEnPantalla(90, 35, "IoT");
-  display.display();
-  delay(5000);  // Espera 5 segundos
-  display.clearDisplay();
-  display.display();
-  // Conexion al broker MQTT
-  //client.setServer(mqtt_servidor_publico, 1883);  // Se hace la conexión al servidor MQTT Público
-  client.setServer(mqtt_servidor_local, 1883);    // Se hace la conexión al servidor MQTT Local
-  client.setCallback(callback);  //Se activa la función que permite recibir mensajes de respuesta
-}  // Fin del void setup()
-////////////////////////////////////////////////////////////
 ////////Función para sensar la presencia humana por medio del sensor pirométrico de forma periódica
 void sensarPresenciaHumanaCercana() {
   if (millis() - tiempoPrevio_Sensado_Presencia >= intervalo_sensado_presencia) {
@@ -540,10 +575,10 @@ void switchPantalla() {
 }
 /////Se actualiza el estado de la pantalla si ha cumplido su periodo máximo encendida y debe cumplir el intervalo de descanso
 void actualizarEstado_Pantalla() {
-  if (!estadoPantalla) {                                                             //Si está apagado
+  if (!estadoPantalla) {                                                            //Si está apagado
     if (millis() - tiempoPrevio_Pantalla_Descando >= duracion_descanso_pantalla) {  //Y ya ha pasado el intervalo entre parpadeos
-      estadoPantalla = true;                                                         //Se enciende
-      cambioEstadoPantalla = true;                                                   //Se cambia el estado
+      estadoPantalla = true;                                                        //Se enciende
+      cambioEstadoPantalla = true;                                                  //Se cambia el estado
       tiempoPrevio_Pantalla_Descando += duracion_descanso_pantalla;                 //Y se registra cuándo sucedió el último cambio
     }
   } else {                                                                           //Si está encendido
@@ -558,19 +593,20 @@ void actualizarEstado_Pantalla() {
 void loop() {
   /////Registrar tiempo actual en milisegundos desde el inicio del programa
   tiempoActual = millis();
+  actualizarEstado_Pantalla();
   ///////////////////////Conectar WIFI y Broker MQTT
   mantenerConexionWIFI();
   mantenerConexionMQTT();
   sensarPresenciaHumanaCercana();
-  actualizarEstado_Pantalla();
+  actualizarGPS();
   actualizarEstado_LED_Conexiones();
   actualizarestado_LED_Actuadores();
   monitorearModoAutomatico();
-  switchLEDS();
-  switchPantalla();
   actualizarDatosAmbientales();  //refresca los datos del sensor DHT
   publicar_datos_MQTT();
   refrescarBarraEstado();  //Actualizar iconos de barra de estado
-  client.loop();           // Loop de cliente MQTT
+  switchLEDS();
+  switchPantalla();
+  client.loop();  // Loop de cliente MQTT
 
 }  // Fin del void loop()
