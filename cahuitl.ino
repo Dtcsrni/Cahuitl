@@ -22,6 +22,7 @@
 #include <DHT.h>
 #include <ArduinoJson.h>
 #include <TinyGPSPlus.h>
+#include <ctime>
 
 
 #define BUILTIN_LED 13
@@ -97,6 +98,7 @@ unsigned long tiempoPrevio_Pantalla_Descando = 0;
 unsigned long tiempoPrevio_Sensado_GPS = 0;
 double latitud = 0.0;
 double longitud = 0.0;
+unsigned long tiempoSistema = 0;
 
 const float temperatura_activacion_automatica = 21.5;
 /////////////////////////////////Intervalos de acciones periódicas////////////////////////////////////////////////////////////////////////
@@ -104,7 +106,7 @@ const int intervalo_lectura_sensores = 5000;       //Intervalo entre lecturas de
 const int intervalo_sensado_presencia = 5000;      //Tiempo entre sensado de presencia
 const int intervalo_descanso_pantalla = 20000;     //Tiempo transcurrido entre cada descanso de la pantalla OLED
 const int duracion_descanso_pantalla = 2000;       //Tiempo que la pantalla descansará antes de encender de nuevo
-const int intervalo_reconexion = 3000;             //Tiempo entre intentos de conexión
+const int intervalo_reconexion = 4000;             //Tiempo entre intentos de conexión
 const int intervalo_verificacion_conexion = 5000;  //Tiempo entre verificaciones de conexión periódicas
 const int intervalo_mensajes = 5000;               //Tiempo entre mensajes de MQTT
 const int intervalo_parpadeo_LED = 500;            //Tiempo entre parpadeos de led
@@ -212,8 +214,9 @@ void setup() {
   display.display();
   // Conexion al broker MQTT
   //client.setServer(mqtt_servidor_publico, 1883);  // Se hace la conexión al servidor MQTT Público
-  client.setServer(mqtt_servidor_local, 1883);  // Se hace la conexión al servidor MQTT Local
   client.setCallback(callback);                 //Se activa la función que permite recibir mensajes de respuesta
+  client.setServer(mqtt_servidor_local, 1883);  // Se hace la conexión al servidor MQTT Local
+
 }  // Fin del void setup()
 ////////////////////////////////////////////////////////////
 //////////////////////////Funciones///////////////////////////////////////////////////////////////////////////////////
@@ -224,18 +227,20 @@ void colocarTextoEnPantalla(byte fila, byte columna, String mensaje) {
     display.print(mensaje);
   }
 }
-void actualizarGPS() {
+void actualizarGPS() {  //Obtiene la posición del GPS solo en el intervalo indicado
   //Si está apagado
   if (tiempoActual - tiempoPrevio_Sensado_GPS >= intervalo_actualizacion_GPS) {  //Y ya ha pasado el intervalo entre parpadeos
-    obtenerPosicionGPS(latitud, longitud);                                       //Se obtiene la posición GPS
+    obtenerPosicionTiempoGPS(latitud, longitud);                                 //Se obtiene la posición GPS y el tiempo del sistema
     tiempoPrevio_Sensado_GPS += intervalo_actualizacion_GPS;                     //Y se registra cuándo sucedió el último cambio
   }
 }
 ////////// Función para obtener la posición GPS
-void obtenerPosicionGPS(double& lat, double& lon) {
+void obtenerPosicionTiempoGPS(double& lat, double& lon) {
   // Limpia las variables de posición
   lat = 0.0;
   lon = 0.0;
+  struct tm tm;
+  const int ajusteUTC6 = -6 * 3600;  // Ajuste para UTC-6 (3600 segundos por hora, 6 horas)
   // Espera hasta que se obtenga una nueva posición válida
   while (GPS_SERIAL.available() > 0) {
     if (gps.encode(GPS_SERIAL.read())) {
@@ -246,7 +251,28 @@ void obtenerPosicionGPS(double& lat, double& lon) {
       }
     }
   }
-  // Imprime información si hay una posición válida
+  if (gps.date.isValid() && gps.time.isValid()) {
+    // Obtener la fecha y la hora del módulo RTC del GPS
+    int year = gps.date.year();
+    byte month = gps.date.month();
+    byte day = gps.date.day();
+    byte hour = gps.time.hour();
+    byte minute = gps.time.minute();
+    byte second = gps.time.second();
+
+    // Crear un objeto de tipo tm (estructura de tiempo estándar en C++)
+
+    tm.tm_year = year - 1900;  // Ajustar el año según la convención de tm
+    tm.tm_mon = month - 1;     // Ajustar el mes según la convención de tm
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_sec = second;
+    tiempoSistema = mktime(&tm);  //Se unifica el struct del tiempo para convertirlo en un timestamp y enviarlo por MQTT
+    // Ajustar el timestamp a la zona horaria UTC-6
+    tiempoSistema = tiempoSistema + ajusteUTC6;
+  }
+  // Si hay una posición válida, se habilita el estado del GPS
   if (lat != 0.0 && lon != 0.0) {
     GPS_habilitado = true;
   } else {
@@ -416,6 +442,7 @@ void publicar_datos_MQTT() {
 
     JsonObject metadatos = datos.createNestedObject("metadatos");
     metadatos["ip"] = ip_dispositivo.toString();
+    metadatos["timestamp"] = tiempoSistema;
 
     size_t length = measureJson(datosSensores);
     char payload[length + 1];  // +1 para el carácter nulo al final
